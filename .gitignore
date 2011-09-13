@@ -1,0 +1,6 @@
+.snaked_project
+
+*.pyc
+/build
+/dist
+/*.egg-info
