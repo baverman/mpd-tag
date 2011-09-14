@@ -1,6 +1,6 @@
 import sqlite3
 
-from mpd_tag import add_tags, execute_sql, set_tags, get_tags, find
+from mpd_tag import add_tags, execute_sql, set_tags, get_tags, find, remove_tags
 
 def pytest_funcarg__conn(request):
     return sqlite3.connect(':memory:')
@@ -27,6 +27,13 @@ def test_one_must_be_able_to_update_tags(conn):
 
     result = get_tags(conn, 'song')
     assert result == {'vol':4, 'rating':5, 'rocking':3}
+
+def test_one_must_be_able_to_remove_specific_tags(conn):
+    set_tags(conn, 'song', vol=2, rocking=3)
+    remove_tags(conn, 'song', 'vol')
+
+    result = get_tags(conn, 'song')
+    assert result == {'rocking':3}
 
 def test_seg_one_name(conn):
     set_tags(conn, 'song1', 'rating')

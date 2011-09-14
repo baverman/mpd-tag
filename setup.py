@@ -1,5 +1,7 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 from setuptools.command import easy_install
+
+from mpd_tag import VERSION
 
 def install_script(self, dist, script_name, script_text, dev_path=None):
     script_text = easy_install.get_script_header(script_text) + (
@@ -11,7 +13,7 @@ easy_install.easy_install.install_script = install_script
 
 setup(
     name     = 'mpd-tag',
-    version  = '0.3',
+    version  = VERSION,
     author   = 'Anton Bobrov',
     author_email = 'bobrov@vl.ru',
     description = 'MPD tag manager',

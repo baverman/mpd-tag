@@ -1,5 +1,10 @@
+import sys
+import os.path
+import optparse
 import sqlite3
 import ast
+
+VERSION = '0.3'
 
 def execute_sql(conn, sql, params):
     cur = conn.cursor()
@@ -25,8 +30,12 @@ def add_tags(conn, path, *tags, **valued_tags):
     for tag, value in valued_tags.items():
         execute_sql(conn, sql, (path, tag, value))
 
-def remove_tags(conn, path):
-    execute_sql(conn, 'DELETE FROM tags WHERE path=?', [path])
+def remove_tags(conn, path, *tags):
+    if not tags:
+        execute_sql(conn, 'DELETE FROM tags WHERE path=?', [path])
+    else:
+        execute_sql(conn,
+            'DELETE FROM tags WHERE path=? and tag IN (%s)' % ','.join('?'*len(tags)), (path,) + tags)
 
 def set_tags(conn, path, *tags, **valued_tags):
     remove_tags(conn, path)
@@ -116,5 +125,141 @@ def find(conn, query, root=None):
     result = execute_sql(conn, 'SELECT DISTINCT path as _p FROM tags WHERE ' + expr, params)
     return [r[0] for r in result]
 
+
+###########################################
+# CLI interface
+
+def get_mpd_client(client=[]):
+    if not client:
+        import mpd
+        c = mpd.MPDClient()
+        c.connect('/var/run/mpd/socket', None)
+        client.append(c)
+
+    return client[0]
+
+def get_input(input_source):
+    if input_source == 'current or stdin':
+        input_source = 'current' if sys.stdin.isatty() else '-'
+
+    if input_source == '-':
+        return (l.strip() for l in sys.stdin)
+    elif input_source == 'current':
+        return [get_mpd_client().currentsong()['file']]
+    elif input_source == 'playlist':
+        return (r['file'] for r in get_mpd_client().playlistinfo())
+    else:
+        return [input_source]
+
+input_help = '''Input can be one of:
+
+  current  - current playlist song
+  playlist - songs from playlist
+  dash(-)  - songs from stdin (for example mpc playlist -f %%file%% | %prog add -i - rating=10)
+
+or simply path/to/song.'''
+
+def add_input_option(parser, default):
+    parser.add_option('-i', '', dest='input',
+    help='Songs source. Default is %default.',
+    default=default)
+
+def do_set(args, conn):
+    p = optparse.OptionParser(usage='%prog set [-i input] tag1 tag2=value ...\n\n' + input_help)
+    add_input_option(p, 'current or stdin')
+    option, args = p.parse_args(args)
+
+    tags, valued_tags = [], {}
+    for r in args:
+        if '=' in r:
+            tag, _, value = r.partition('=')
+            valued_tags[tag] = value
+        else:
+            tags.append(r)
+
+    for r in get_input(option.input):
+        set_tags(conn, r, *tags, **valued_tags)
+        print r
+
+def do_add(args, conn):
+    p = optparse.OptionParser(usage='%prog add [-i input] tag1 tag2=value ...\n\n' + input_help)
+    add_input_option(p, 'current or stdin')
+    option, args = p.parse_args(args)
+
+    tags, valued_tags = [], {}
+    for r in args:
+        if '=' in r:
+            tag, _, value = r.partition('=')
+            valued_tags[tag] = value
+        else:
+            tags.append(r)
+
+    for r in get_input(option.input):
+        add_tags(conn, r, *tags, **valued_tags)
+        print r
+
+def do_find(args, conn):
+    for r in find(conn, args[0]):
+        print r
+
+def do_show(args, conn):
+    p = optparse.OptionParser(usage='%prog show [-i input] [alltags]\n\n' + input_help)
+    add_input_option(p, 'current or stdin')
+    option, args = p.parse_args(args)
+
+    if args and args[0] == 'alltags':
+        for r in execute_sql(conn, 'SELECT DISTINCT tag FROM tags', []):
+            print r[0]
+    else:
+        for r in get_input(option.input):
+            tags = get_tags(conn, r)
+            print r
+            print ', '.join(k if v is None else ('%s=%s' % (k,v)) for k, v in tags.items())
+            print
+
+def do_del(args, conn):
+    p = optparse.OptionParser(usage='%prog del [-i input] tag1 tag2...\n\n' + input_help)
+    add_input_option(p, 'current or stdin')
+    option, args = p.parse_args(args)
+
+    for r in get_input(option.input):
+        remove_tags(conn, r, *args)
+        print r
+
+
 def run():
-    pass
+    usage = '''%prog [mtag options] CMD [command options]
+
+Where CMD is one of:
+
+  add  - append or change tags
+  set  - create or replace tags
+  find - search songs by createria
+  show - display various info
+  del  - remove tags'''
+
+    p = optparse.OptionParser(usage=usage, version='%prog ' + VERSION)
+    p.add_option('-d', '--db', dest='db',
+        help="Specify alternative tag db location. Default is %default")
+    p.disable_interspersed_args()
+    p.set_defaults(db=os.path.join(os.getenv('XDG_DATA_HOME', os.path.expanduser('~/.local/share')),
+        'mpd_tag', 'tags.sqlite'))
+
+    option, args = p.parse_args()
+
+    dirname = os.path.dirname(option.db)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname, 0755)
+
+    conn = sqlite3.connect(option.db)
+
+    if not args:
+        p.error('You should specify command')
+
+    cmd_name = args[0]
+    handler = globals().get('do_' + cmd_name, None)
+
+    if not handler:
+        p.error('Unknown command: %s' % cmd_name)
+
+    handler(args[1:], conn)
