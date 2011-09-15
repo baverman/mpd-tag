@@ -143,13 +143,13 @@ def get_input(input_source):
         input_source = 'current' if sys.stdin.isatty() else '-'
 
     if input_source == '-':
-        return (l.strip() for l in sys.stdin)
+        return (l.strip().decode('utf-8') for l in sys.stdin)
     elif input_source == 'current':
-        return [get_mpd_client().currentsong()['file']]
+        return [get_mpd_client().currentsong()['file'].decode('utf-8')]
     elif input_source == 'playlist':
-        return (r['file'] for r in get_mpd_client().playlistinfo())
+        return (r['file'].decode('utf-8') for r in get_mpd_client().playlistinfo())
     else:
-        return [input_source]
+        return [input_source.decode('utf-8')]
 
 input_help = '''Input can be one of:
 
@@ -177,6 +177,7 @@ def do_set(args, conn):
         else:
             tags.append(r)
 
+    conn = conn()
     for r in get_input(option.input):
         set_tags(conn, r, *tags, **valued_tags)
         print r
@@ -194,12 +195,13 @@ def do_add(args, conn):
         else:
             tags.append(r)
 
+    conn = conn()
     for r in get_input(option.input):
         add_tags(conn, r, *tags, **valued_tags)
         print r
 
 def do_find(args, conn):
-    for r in find(conn, args[0]):
+    for r in find(conn(), args[0]):
         print r
 
 def do_show(args, conn):
@@ -207,6 +209,7 @@ def do_show(args, conn):
     add_input_option(p, 'current or stdin')
     option, args = p.parse_args(args)
 
+    conn = conn()
     if args and args[0] == 'alltags':
         for r in execute_sql(conn, 'SELECT DISTINCT tag FROM tags', []):
             print r[0]
@@ -222,6 +225,7 @@ def do_del(args, conn):
     add_input_option(p, 'current or stdin')
     option, args = p.parse_args(args)
 
+    conn = conn()
     for r in get_input(option.input):
         remove_tags(conn, r, *args)
         print r
@@ -251,7 +255,11 @@ Where CMD is one of:
     if not os.path.exists(dirname):
         os.makedirs(dirname, 0755)
 
-    conn = sqlite3.connect(option.db)
+    def conn(cn=[]):
+        if not cn:
+            cn.append(sqlite3.connect(option.db))
+
+        return cn[0]
 
     if not args:
         p.error('You should specify command')
