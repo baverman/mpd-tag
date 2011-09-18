@@ -150,6 +150,9 @@ def get_input(input_source):
     if input_source == 'current or stdin':
         input_source = 'current' if sys.stdin.isatty() else '-'
 
+    if input_source == 'playlist or stdin':
+        input_source = 'playlist' if sys.stdin.isatty() else '-'
+
     if input_source == '-':
         return (l.rstrip('\r\n') for l in sys.stdin)
     elif input_source == 'current':
@@ -171,6 +174,28 @@ def add_input_option(parser, default):
     parser.add_option('-i', '', dest='input',
     help='Songs source. Default is %default.',
     default=default)
+
+def process_output(output, seq):
+    if output == 'append or stdout':
+        output = 'append' if sys.stdin.isatty() else '-'
+
+    if output == 'replace or stdout':
+        output = 'replace' if sys.stdin.isatty() else '-'
+
+    if output in ('replace', 'append'):
+        c = get_mpd_client()
+        c.command_list_ok_begin()
+
+        if output == 'replace':
+            c.clear()
+
+        for r in seq:
+            c.add(r.encode('utf-8'))
+
+        c.command_list_end()
+    else:
+        for r in seq:
+            print r
 
 def do_set(args, conn):
     p = optparse.OptionParser(usage='%prog set [-i input] tag1 tag2=value ...\n\n' + input_help)
@@ -209,8 +234,32 @@ def do_add(args, conn):
         print r
 
 def do_find(args, conn):
-    for r in find(conn(), args[0]):
-        print r
+    p = optparse.OptionParser(usage='%prog find [-o output] query')
+    p.add_option('-o', '', dest='output',
+        help='Where to put found songs. Default is %default', default='append or stdout')
+    option, args = p.parse_args(args)
+
+    process_output(option.output, find(conn(), args[0]))
+
+def do_filter(args, conn):
+    p = optparse.OptionParser(usage='%prog filter [-o output] [-i input] [-r] query')
+    p.add_option('-o', '', dest='output',
+        help='Where to put result. Default is %default', default='replace or stdout')
+    p.add_option('-i', '', dest='input',
+        help='Songs source. Default is %default', default='playlist or stdin')
+    p.add_option('-r', '', dest='remove', action='store_true',
+        help='Remove matched songs', default=False)
+    option, args = p.parse_args(args)
+
+    playlist = get_input(option.input)
+    matched = set(find(conn(), args[0]))
+
+    if option.remove:
+        result = (r for r in playlist if r not in matched)
+    else:
+        result = (r for r in playlist if r in matched)
+
+    process_output(option.output, result)
 
 def do_show(args, conn):
     p = optparse.OptionParser(usage='%prog show [-i input] [alltags]\n\n' + input_help)
@@ -244,11 +293,12 @@ def run():
 
 Where CMD is one of:
 
-  add  - append or change tags
-  set  - create or replace tags
-  find - search songs by createria
-  show - display various info
-  del  - remove tags'''
+  add    - append or change tags
+  set    - create or replace tags
+  find   - search songs by criteria
+  filter - filter songs by criteria
+  show   - display various info
+  del    - remove tags'''
 
     p = optparse.OptionParser(usage=usage, version='%prog ' + VERSION)
     p.add_option('-d', '--db', dest='db',
