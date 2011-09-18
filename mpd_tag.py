@@ -56,8 +56,12 @@ class ExprGenerator(ast.NodeVisitor):
         self.params = []
 
     def visit_Name(self, node):
-        self.expr += 'EXISTS (select tag from tags where path = _p and tag = ?)'
-        self.params.append(node.id)
+        tag_name = node.id
+        if tag_name == 'anytag':
+            self.expr += 'EXISTS (select tag from tags where path = _p)'
+        else:
+            self.expr += 'EXISTS (select tag from tags where path = _p and tag = ?)'
+            self.params.append(tag_name)
 
     def visit_BoolOp(self, node):
         op_name = {ast.And:' and ', ast.Or:' or '}[node.op.__class__]

@@ -93,3 +93,11 @@ def test_seg_complex(conn):
 
     result = find(conn, 'rating > 5 and mood')
     assert result == ['song2']
+
+def test_seg_anytag(conn):
+    set_tags(conn, 'song1', 'mood', rating=5)
+    set_tags(conn, 'song2', 'mood', rating=10)
+    set_tags(conn, 'song3', rating=10)
+
+    result = find(conn, 'anytag')
+    assert result == ['song1', 'song2', 'song3']
