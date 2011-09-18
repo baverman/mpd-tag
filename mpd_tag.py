@@ -3,6 +3,10 @@ import os.path
 import optparse
 import sqlite3
 import ast
+import locale
+import codecs
+
+TERM_ENCODING = locale.getdefaultlocale()[1]
 
 VERSION = '0.3'
 
@@ -143,13 +147,13 @@ def get_input(input_source):
         input_source = 'current' if sys.stdin.isatty() else '-'
 
     if input_source == '-':
-        return (l.strip().decode('utf-8') for l in sys.stdin)
+        return (l.rstrip('\r\n') for l in sys.stdin)
     elif input_source == 'current':
         return [get_mpd_client().currentsong()['file'].decode('utf-8')]
     elif input_source == 'playlist':
         return (r['file'].decode('utf-8') for r in get_mpd_client().playlistinfo())
     else:
-        return [input_source.decode('utf-8')]
+        return [input_source.decode(TERM_ENCODING)]
 
 input_help = '''Input can be one of:
 
@@ -269,5 +273,8 @@ Where CMD is one of:
 
     if not handler:
         p.error('Unknown command: %s' % cmd_name)
+
+    sys.stdout = codecs.getwriter(TERM_ENCODING)(sys.stdout)
+    sys.stdin = codecs.getreader(TERM_ENCODING)(sys.stdin)
 
     handler(args[1:], conn)
