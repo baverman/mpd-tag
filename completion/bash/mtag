@@ -50,7 +50,7 @@ _mtag()
 			;;
 		find)
 			compopt -o nospace
-			COMPREPLY=( $( compgen -W "`mtag show alltags`" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "anytag `mtag show alltags`" -- "$cur" ) )
 			return 0			
 			;;
 		*)
