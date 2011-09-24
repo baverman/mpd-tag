@@ -177,10 +177,10 @@ def add_input_option(parser, default):
 
 def process_output(output, seq):
     if output == 'append or stdout':
-        output = 'append' if sys.stdin.isatty() else '-'
+        output = 'append' if sys.stdout.isatty() else '-'
 
     if output == 'replace or stdout':
-        output = 'replace' if sys.stdin.isatty() else '-'
+        output = 'replace' if sys.stdout.isatty() else '-'
 
     if output in ('replace', 'append'):
         c = get_mpd_client()
