@@ -140,8 +140,10 @@ def find(conn, query, root=None):
 def get_mpd_client(client=[]):
     if not client:
         import mpd
+        addr = os.environ.get('MPD_HOST', 'localhost:6600')
+        host, _, port = addr.partition(':')
         c = mpd.MPDClient()
-        c.connect('/var/run/mpd/socket', None)
+        c.connect(host, port)
         client.append(c)
 
     return client[0]
