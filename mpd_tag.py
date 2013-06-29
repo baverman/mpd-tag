@@ -1,6 +1,6 @@
 import sys
 import os.path
-import optparse
+import argparse
 import sqlite3
 import ast
 import locale
@@ -8,7 +8,7 @@ import codecs
 
 TERM_ENCODING = locale.getdefaultlocale()[1]
 
-VERSION = '0.3'
+VERSION = '0.4dev'
 
 def execute_sql(conn, sql, params):
     cur = conn.cursor()
@@ -148,62 +148,70 @@ def get_mpd_client(client=[]):
 
     return client[0]
 
-def get_input(input_source):
-    if input_source == 'current or stdin':
-        input_source = 'current' if sys.stdin.isatty() else '-'
+def get_sources(args):
+    if args.file:
+        return [args.file.decode(TERM_ENCODING)]
+    elif args.filelist:
+        if args.filelist == '-':
+            f = sys.stdin
+        else:
+            f = open(args.filelist)
 
-    if input_source == 'playlist or stdin':
-        input_source = 'playlist' if sys.stdin.isatty() else '-'
-
-    if input_source == '-':
-        return (l.rstrip('\r\n') for l in sys.stdin)
-    elif input_source == 'current':
-        return [get_mpd_client().currentsong()['file'].decode('utf-8')]
-    elif input_source == 'playlist':
+        return (l.rstrip('\r\n') for l in f)
+    elif args.playlist:
         return (r['file'].decode('utf-8') for r in get_mpd_client().playlistinfo())
     else:
-        return [input_source.decode(TERM_ENCODING)]
+        if args.filter:
+            return []
+        else:
+            return [get_mpd_client().currentsong()['file'].decode('utf-8')]
 
-input_help = '''Input can be one of:
-
-  current  - current playlist song
-  playlist - songs from playlist
-  dash(-)  - songs from stdin (for example mpc playlist -f %%file%% | %prog add -i - rating=10)
-
-or simply path/to/song.'''
-
-def add_input_option(parser, default):
-    parser.add_option('-i', '', dest='input',
-    help='Songs source. Default is %default.',
-    default=default)
-
-def process_output(output, seq):
-    if output == 'append or stdout':
-        output = 'append' if sys.stdout.isatty() else '-'
-
-    if output == 'replace or stdout':
-        output = 'replace' if sys.stdout.isatty() else '-'
-
-    if output in ('replace', 'append'):
+def process_playlist_actions(sources, args):
+    if args.use_as_playlist:
         c = get_mpd_client()
         c.command_list_ok_begin()
 
-        if output == 'replace':
+        if not args.add_to_playlist:
             c.clear()
 
-        for r in seq:
+        for r in sources:
             c.add(r.encode('utf-8'))
 
         c.command_list_end()
+
+def filter_sources(sources, args, conn):
+    if args.filter:
+        if sources:
+            matched = set(find(conn(), args.filter))
+
+            if args.remove:
+                result = (r for r in sources if r not in matched)
+            else:
+                result = (r for r in sources if r in matched)
+        else:
+            result = find(conn(), args.filter)
+
+        return result
     else:
-        for r in seq:
-            print r
+        return sources
 
-def do_set(args, conn):
-    p = optparse.OptionParser(usage='%prog set [-i input] tag1 tag2=value ...\n\n' + input_help)
-    add_input_option(p, 'current or stdin')
-    option, args = p.parse_args(args)
+def show_all_tags(conn):
+    conn = conn()
+    for r in execute_sql(conn, 'SELECT DISTINCT tag FROM tags', []):
+        print r[0]
 
+def show_with_tags(sources, conn):
+    conn = conn()
+    for r in sources:
+        tags = get_tags(conn, r)
+        tags_str = ' '.join(k if v is None else ('%s=%s' % (k,v)) for k, v in tags.items())
+        print u'{}\t{}'.format(tags_str, r)
+
+def show_without_tags(sources):
+    for r in sources:
+        print r
+
+def parse_tags_with_values(args):
     tags, valued_tags = [], {}
     for r in args:
         if '=' in r:
@@ -212,125 +220,84 @@ def do_set(args, conn):
         else:
             tags.append(r)
 
+    return tags, valued_tags
+
+def process_tag_actions(sources, args, conn):
     conn = conn()
-    for r in get_input(option.input):
-        set_tags(conn, r, *tags, **valued_tags)
-        print r
+    if args.clear:
+        for r in sources:
+            remove_tags(conn, r)
 
-def do_add(args, conn):
-    p = optparse.OptionParser(usage='%prog add [-i input] tag1 tag2=value ...\n\n' + input_help)
-    add_input_option(p, 'current or stdin')
-    option, args = p.parse_args(args)
+    if args.delete:
+        for r in sources:
+            remove_tags(conn, r, *args.delete)
 
-    tags, valued_tags = [], {}
-    for r in args:
-        if '=' in r:
-            tag, _, value = r.partition('=')
-            valued_tags[tag] = value
-        else:
-            tags.append(r)
+    if args.set:
+        tags, vtags = parse_tags_with_values(args.set)
+        for r in sources:
+            set_tags(conn, r, *tags, **vtags)
 
-    conn = conn()
-    for r in get_input(option.input):
-        add_tags(conn, r, *tags, **valued_tags)
-        print r
-
-def do_find(args, conn):
-    p = optparse.OptionParser(usage='%prog find [-o output] query')
-    p.add_option('-o', '', dest='output',
-        help='Where to put found songs. Default is %default', default='append or stdout')
-    option, args = p.parse_args(args)
-
-    process_output(option.output, find(conn(), args[0]))
-
-def do_filter(args, conn):
-    p = optparse.OptionParser(usage='%prog filter [-o output] [-i input] [-r] query')
-    p.add_option('-o', '', dest='output',
-        help='Where to put result. Default is %default', default='replace or stdout')
-    p.add_option('-i', '', dest='input',
-        help='Songs source. Default is %default', default='playlist or stdin')
-    p.add_option('-r', '', dest='remove', action='store_true',
-        help='Remove matched songs', default=False)
-    option, args = p.parse_args(args)
-
-    playlist = get_input(option.input)
-    matched = set(find(conn(), args[0]))
-
-    if option.remove:
-        result = (r for r in playlist if r not in matched)
-    else:
-        result = (r for r in playlist if r in matched)
-
-    process_output(option.output, result)
-
-def do_show(args, conn):
-    p = optparse.OptionParser(usage='%prog show [-i input] [alltags]\n\n' + input_help)
-    add_input_option(p, 'current or stdin')
-    option, args = p.parse_args(args)
-
-    conn = conn()
-    if args and args[0] == 'alltags':
-        for r in execute_sql(conn, 'SELECT DISTINCT tag FROM tags', []):
-            print r[0]
-    else:
-        for r in get_input(option.input):
-            tags = get_tags(conn, r)
-            print r
-            print ', '.join(k if v is None else ('%s=%s' % (k,v)) for k, v in tags.items())
-            print
-
-def do_del(args, conn):
-    p = optparse.OptionParser(usage='%prog del [-i input] tag1 tag2...\n\n' + input_help)
-    add_input_option(p, 'current or stdin')
-    option, args = p.parse_args(args)
-
-    conn = conn()
-    for r in get_input(option.input):
-        remove_tags(conn, r, *args)
-        print r
-
+    if args.add:
+        tags, vtags = parse_tags_with_values(args.add)
+        for r in sources:
+            add_tags(conn, r, *tags, **vtags)
 
 def run():
-    usage = '''%prog [mtag options] CMD [command options]
+    parser = argparse.ArgumentParser()
 
-Where CMD is one of:
+    parser.add_argument('--db', dest='db',
+        help="Specify alternative tag db location")
 
-  add    - append or change tags
-  set    - create or replace tags
-  find   - search songs by criteria
-  filter - filter songs by criteria
-  show   - display various info
-  del    - remove tags'''
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('-i', dest='file')
+    source.add_argument('-l', dest='filelist', nargs='?', const='-')
+    source.add_argument('-p', dest='playlist', action='store_true')
 
-    p = optparse.OptionParser(usage=usage, version='%prog ' + VERSION)
-    p.add_option('-d', '--db', dest='db',
-        help="Specify alternative tag db location. Default is %default")
-    p.disable_interspersed_args()
-    p.set_defaults(db=os.path.join(os.getenv('XDG_DATA_HOME', os.path.expanduser('~/.local/share')),
-        'mpd_tag', 'tags.sqlite'))
+    parser.add_argument('-f', dest='filter')
+    parser.add_argument('-r', dest='remove', action='store_true')
+    
+    parser.add_argument('-S', dest='set', nargs='+')
+    parser.add_argument('-A', dest='add', nargs='+')
+    parser.add_argument('-D', dest='delete', nargs='+')
+    parser.add_argument('-C', dest='clear', action='store_true')
 
-    option, args = p.parse_args()
+    parser.add_argument('-T', dest='alltags', action='store_true')
+    
+    parser.add_argument('-P', dest='use_as_playlist', action='store_true')
 
-    dirname = os.path.dirname(option.db)
+    parser.add_argument('-n', dest='only_filenames', action='store_true')
+    parser.add_argument('-a', dest='add_to_playlist', action='store_true')
+
+    parser.add_argument('--version', action='version', version=VERSION)
+
+    parser.set_defaults(db=os.path.join(os.getenv('XDG_DATA_HOME',
+        os.path.expanduser('~/.local/share')), 'mpd_tag', 'tags.sqlite'))
+
+    args = parser.parse_args()
+
+    dirname = os.path.dirname(args.db)
     if not os.path.exists(dirname):
-        os.makedirs(dirname, 0755)
+        os.makedirs(dirname)
 
     def conn(cn=[]):
         if not cn:
-            cn.append(sqlite3.connect(option.db))
+            cn.append(sqlite3.connect(args.db))
 
         return cn[0]
-
-    if not args:
-        p.error('You should specify command')
-
-    cmd_name = args[0]
-    handler = globals().get('do_' + cmd_name, None)
-
-    if not handler:
-        p.error('Unknown command: %s' % cmd_name)
 
     sys.stdout = codecs.getwriter(TERM_ENCODING)(sys.stdout)
     sys.stdin = codecs.getreader(TERM_ENCODING)(sys.stdin)
 
-    handler(args[1:], conn)
+    if args.alltags:
+        show_all_tags(conn)
+    else:
+        sources = get_sources(args)
+        sources = filter_sources(sources, args, conn)
+
+        process_tag_actions(sources, args, conn)
+        process_playlist_actions(sources, args)
+
+        if args.only_filenames:
+            show_without_tags(sources)
+        else:
+            show_with_tags(sources, conn)
